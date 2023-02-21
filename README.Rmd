@@ -1,0 +1,476 @@
+---
+title: "Faculty Pay Rate Determination"
+output:
+  md_document:
+    variant: markdown_github
+  html_document: 
+    fig_width: 10
+    theme: paper
+---
+
+```{r setup, message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggthemr)
+
+sp_dollars <- function(value, varname) {
+  assign(varname, value, envir = .GlobalEnv) %>% 
+    scales::dollar()
+}
+
+sp_hours <- function(value, varname) {
+  assign(varname, value, envir = .GlobalEnv)
+  paste0(round(value/0.25)*0.25, " hours")
+}
+
+```
+
+Many full-time CCEMS employees assist in teaching both public and EMS education courses. This extra duty work should be paid at a rate that is commiserate with the market rate for instructors in these disciplines. However, CCEMS employee pay rates are based on their credential rank, position, EMS experience, and tenure within the organization. While these pay rates are appropriately set for EMS field roles, they reflect neither the type of teaching being done nor the employee's experience and competence as an instructor. Furthermore, the wide variation in employee pay rates and interchangeability of specific instructors substantially complicates budgeting for labor costs involved in offering these courses.
+
+Setting extra duty job rates specific to the types of instruction remedies this problem. Most of this work is done as overtime, and labor laws require paying *blended overtime* when an employee has multiple pay rates.
+
+Blended overtime is calculated as a weighted average of the wages worked. For example, employee A is employed full-time as a P2 paramedic getting paid `r sp_dollars(30, "field_rate")`/hr and helps out teaching EMT skills for `r sp_dollars(25, "teaching_rate")`/hr. Employee A works two 24 hours shifts as a paramedic (totaling `r sp_hours(2*24,"field_hours")` ) and then teaches for `r sp_hours(4, "teaching_hours")`. This totals `r sp_hours(field_hours + teaching_hours, "total_hours")`. The employee is paid `r sp_dollars(field_hours*field_rate,"field_pay")` for their field shifts and `r sp_dollars(teaching_hours*teaching_rate, "teaching_pay")` for their teaching time, totaling `r sp_dollars(field_pay+teaching_pay, "total_pay")`. Overtime premium is calculated based on the blended, or weighted, pay rate. The blended pay rate is calculated by dividing the total hours worked, `r total_hours`, by the total pay, `r scales::dollar(total_pay)`, resulting in a weighted average rate of `r sp_dollars(total_pay/total_hours, "blended_pay")`/hr. Overtime premium is 0.5 times this pay rate, equaling `r sp_dollars(blended_pay/2, "blended_ot")`/hr. Overtime pay is the base pay rate plus the overtime premium. For Employee A, overtime worked in the field would be paid `r scales::dollar(blended_ot + field_rate)`/hr and overtime worked teaching would be paid `r scales::dollar(blended_ot + teaching_rate)`.
+
+This document outlines the process and findings for target pay rates based on market analysis as well as a process for determining fair and reasonable CCEMS pay rates. These rates are determined based on the market analysis and on calculating the effects of blended overtime. The objective is to set a base pay rate for specific types of instructional work that, when combined with blended overtime, will result in an effective pay rate that is close to the target pay rates. This determination is balanced by ensuring that straight pay (when employee doesn't teach in overtime) is still reasonably fair.
+
+## Teaching Positions and Target Pay Rates
+
+We propose four types of teaching positions:
+
+### CPR Instructor
+
+Responsible for teaching CPR, AED, and First Aid courses (including Wilderness First Aid). Requires CPR instructor certification. Market pay rates vary widely, but appear to generally be \$15-20/hour in the Houston market.
+
+**Target pay rate for CPR Instructor:** `r sp_dollars(20, "cpr_rate")` /hr.
+
+### CE Instructor
+
+Responsible for teaching continuing education courses, including standardized "card courses" from AHA and NAEMT, such as ACLS, ACLS-EP, AMLS, PHTLS, and PEPP. Typically requires EMT or Paramedic certification along with course-specific instructor certification. Market pay rates are typically \$16-20/hour, depending on type of course and experience.
+
+**Target pay rate for CE Instructor:** `r sp_dollars(25, "ce_rate")` /hr.
+
+### EMT Skills Instructor
+
+Responsible for teaching lab skills and scenarios for EMT Basic courses. Requires a minimum of an EMT-Basic certification. Skills instructors are provided with lesson plans, skill sheets, and background information. Market pay rates vary more widely for this role, but seem to range from \$18-25/hour, with most positions paying at the lower end of this range.
+
+**Target pay rate for EMT Skills Instructor:** `r sp_dollars(25, "emt_skills_rate")`/hr.
+
+### Paramedic Skills Instructor
+
+Similar to an EMT skills instructor, but with responsibility for teaching more complex skills and scenarios. Requires a minimum of an EMT-Paramedic certification. Market pay rates are \$22-25/hour.
+
+**Target pay rate for Paramedic Skills Instructor:** `r sp_dollars(30, "pm_skills_rate")` /hr.
+
+### Adjunct Faculty
+
+Responsible for planning, developing, and teaching EMS classes in a given curriculum. This includes:
+
+-   Preparing for and delivering lectures for EMT and Paramedic courses.
+
+-   Planning and independently running EMT and paramedic class sessions (4 to 8 hours).
+
+-   Coordinating "Card courses" (requires course-specific Course Coordinator certification).
+
+Market pay rates vary but some price points include \$20, \$31, and at the high end, \$47.66/hr.
+
+**Target pay rate for Adjunct Faculty**: `r sp_dollars(38, "adjunct_rate")` /hr.
+
+## Pay Rate Analysis (Using Cumulative Overtime)
+
+The effective pay rate (factoring in blended overtime) is calculated based on the past year's worth of actual work performed by current instructors along with their current base pay rates. Existing schedule reporting doesn't allow for filtering out what teaching hours were CPR, EMT skills instruction, or faculty lecturing. Therefore, effective pay rates were determined by simulating all teaching hours paid out at that specific rate, for instructors who teach at that level.
+
+```{r load, message=FALSE, warning=FALSE, include=FALSE}
+# load and wrangle data
+scheduled_shifts <- readxl::read_xlsx(here::here("data/ScheduledShiftsByPayCode.xlsx"))
+scheduled_shifts %>% unite("eename", Member, FNAME, sep=", ") -> scheduled_shifts
+scheduled_shifts %>% mutate(eename = str_to_upper(eename)) -> scheduled_shifts
+
+# Add week dates, then determine total hours worked by week
+scheduled_shifts %>% 
+  mutate(shift_date = ymd_hms(`Shift Start`)) %>% 
+  mutate(shift_week = floor_date(shift_date, unit="week")) %>% 
+  group_by(eename, shift_week) %>% 
+  mutate(week_total_hours = cumsum(`Shift Hours`)) -> scheduled_shifts
+
+scheduled_shifts %>% ungroup() -> scheduled_shifts
+
+scheduled_shifts %>% filter(Job == "Education") %>% group_by(eename, shift_week) %>% summarize(hours = sum(`Shift Hours`), n=n()) %>% 
+  group_by(eename) %>% summarize(avg_hours = mean(hours), med_hours = median(hours),
+                                 iqr_hours = IQR(hours), avg_n = mean(n), med_n = median(n), iqr_n = IQR(n))
+
+#Set an average number of weekly hours teaching
+
+scheduled_shifts %>% filter(Job == "Education") %>% group_by(eename, shift_week) %>% summarize(hours = sum(`Shift Hours`), n=n()) %>% 
+  group_by(eename) %>% summarize(avg_hours = mean(hours), med_hours = median(hours),
+                                 iqr_hours = IQR(hours), avg_n = mean(n), med_n = median(n), iqr_n = IQR(n)) %>%
+  filter(med_hours < 10) %>% 
+  summarize(avg_hours = mean(avg_hours), med_med_hours = median(med_hours), iqr_med_hours = IQR(med_hours),
+            avg_n = mean(avg_n), med_n = median(med_n), iqr_med_n = IQR(med_n), avg_iqr_n = mean(iqr_n)) %>% 
+  mutate(str_iqr_med_hours = paste0(round(med_med_hours - iqr_med_hours), " - ",round(med_med_hours + iqr_med_hours))) -> averages_summary
+scheduled_shifts %>% filter(Job != "Education") %>% group_by(eename, shift_week) %>% summarize(hours = sum(`Shift Hours`, na.rm=TRUE), n=n()) %>% 
+  group_by(eename) %>% 
+  summarize(avg_hours = mean(hours), med_hours = median(hours),
+                                 iqr_hours = IQR(hours), avg_n = mean(n), med_n = median(n), iqr_n = IQR(n)) %>%
+  summarize(avg_hours = mean(avg_hours), med_med_hours = median(med_hours), iqr_med_hours = IQR(med_hours),
+            avg_n = mean(avg_n), med_n = median(med_n), iqr_med_n = IQR(med_n), avg_iqr_n = mean(iqr_n)) %>% 
+  mutate(str_iqr_med_hours = paste0(round(med_med_hours - iqr_med_hours), " - ",round(med_med_hours + iqr_med_hours)))-> averages_field_summary
+scheduled_shifts %>% filter(Job == "Education") %>% group_by(eename, shift_week) %>% summarize(hours = sum(`Shift Hours`), n=n()) %>% 
+  group_by(eename) %>% summarize(avg_hours = mean(hours), med_hours = median(hours),
+                                 iqr_hours = IQR(hours), avg_n = mean(n), med_n = median(n), iqr_n = IQR(n)) %>%
+  filter(med_hours < 10) %>% 
+  summarize(avg_hours = mean(med_hours), med_hours = median(med_hours)) %>% pull(avg_hours) -> avg_teaching_hours
+```
+
+The historical schedule data includes `r scales::comma(nrow(scheduled_shifts))` shifts for `r length(unique(scheduled_shifts$eename))` instructors in the date range `r format.POSIXct(range(scheduled_shifts$shift_date, na.rm=TRUE)[1], "%x")` through `r format.POSIXct(range(scheduled_shifts$shift_date, na.rm=TRUE)[2], "%x")`. The typical employee averaged `r round(averages_field_summary$avg_n[1])` field shifts and `r round(averages_summary$avg_n[1])` teaching assignment per week, with a median of `r round(averages_field_summary$med_med_hours[1])` hours (IQR `r averages_field_summary$str_iqr_med_hours[1]`) in the field and `r round(averages_summary$med_med_hours[1])` hours (IQR `r averages_summary$str_iqr_med_hours[1]`) teaching each week. As can be seen in the graph below, two employees had median weekly education hours above 20 due to light duty assignments coded to Education. For the sake of average analysis, these outliers were excluded.
+
+```{r echo=FALSE, fig.height=4, fig.width=10, message=FALSE, warning=FALSE}
+ggthemr("flat")
+
+scheduled_shifts %>% group_by(eename, shift_week) %>% summarize(total_weekly_hours = sum(`Shift Hours`, na.rm=TRUE)) %>% group_by(eename) %>% 
+  summarize(`Median Weekly Total Hours` = median(total_weekly_hours)) %>% arrange(`Median Weekly Total Hours`) -> eename_levels
+
+scheduled_shifts %>% mutate(`Type of Work` = factor(if_else(Job == "Education", "Teaching Hours", "Field Hours"))) %>% 
+  mutate(eename = factor(eename, levels=eename_levels$eename)) %>% 
+  filter(!is.na(`Type of Work`)) %>% group_by(eename, shift_week, `Type of Work`) %>% summarize(hours = sum(`Shift Hours`, na.rm=TRUE), n=n()) %>% 
+  #group_by(eename, `Type of Work`) %>% summarize(avg_hours = mean(hours), med_hours = median(hours)) %>%
+  unite("eename", eename, `Type of Work`, remove = FALSE) %>% 
+  ggplot(aes(x=eename, y=hours, color=`Type of Work`, fill = `Type of Work`)) +
+  geom_boxplot() + 
+  stat_summary(geom = "crossbar", fun = "mean", fatten = 2, color = "black") + 
+  stat_summary(geom = "point", fun = "mean", color = "black", shape = 18, size = 3) +
+  scale_color_brewer(palette = "Set1") +
+  scale_fill_brewer(palette = "Set1") +
+  ylim(0,150)+
+  labs(x="Employees", y = "Hours", title="Average Weekly Hours by Employee")+
+  theme(axis.text.x=element_blank())
+  
+```
+
+Overtime hours were calculated as the any hours worked after the first forty hours in a week. Depending on when in the week the employee taught, that resulted in different allocations of overtime to field or teaching. As can be seen below, teaching hours rarely resulted in overtime pay. This is not unexpected; a typical employee might work one 24 hour shift on a Sunday or Monday, and then not work their next shift until Thursday or Friday. Since classes are almost always on weekdays, this would put almost all teaching assignments before the employee hits 40 hours in the week.
+
+```{r echo=FALSE, fig.height=4, fig.width=10, message=FALSE, warning=FALSE}
+# Determine what regular weekly hours look like. Assign each shift to straight hours and regular hours.
+
+scheduled_shifts %>% mutate(`Type of Work` = factor(if_else(Job == "Education", "Teaching", "Field"))) %>% filter(!is.na(Job)) %>% 
+  filter(!(eename %in% c("HOGUE, DANA", "SADLER, LORENA", "SINGLETON, LYNNE"))) %>% 
+  mutate(eename = factor(eename, levels=eename_levels$eename)) %>% 
+  select(eename, `Type of Work`, `Shift Hours`, shift_week, shift_date) %>% 
+  group_by(eename, shift_week) %>% 
+  arrange(shift_date) %>% 
+  mutate(total_hours = cumsum(`Shift Hours`)) %>% 
+  mutate(straight_hours = if_else(total_hours <= 40, `Shift Hours`, `Shift Hours`-(total_hours-40))) %>% 
+  mutate(straight_hours = if_else(straight_hours > 0, straight_hours, 0)) %>% 
+  mutate(ot_hours = `Shift Hours`-straight_hours) -> schedule_categorized_hours
+
+schedule_categorized_hours %>% group_by(eename, shift_week, `Type of Work`) %>% 
+  mutate(eename = factor(eename, levels=eename_levels$eename)) %>% 
+  summarize(straight_hours = sum(straight_hours),
+            ot_hours = sum(ot_hours)) %>% 
+  pivot_wider(names_from = `Type of Work`, values_from = c(straight_hours, ot_hours)) %>% 
+  mutate(total_teaching_hours = straight_hours_Teaching + ot_hours_Teaching,
+         total_field_hours = straight_hours_Field + ot_hours_Field) %>% 
+  mutate(total_hours = total_teaching_hours+total_field_hours,
+         total_straight_hours = straight_hours_Teaching + straight_hours_Field,
+         total_ot_hours = ot_hours_Teaching + ot_hours_Field) -> schedule_weekly_totals
+
+schedule_weekly_totals %>% select(-starts_with("total")) %>% 
+  mutate(eename = factor(eename, levels=eename_levels$eename)) %>% 
+  pivot_longer(cols = contains("hours"), 
+               names_to = "Type of Hours",
+               values_to = "Hours") %>% 
+  separate(`Type of Hours`, c("Type of Hours", "Type of Work"), sep="_hours_") %>% 
+  mutate(`Type of Hours` = paste0(`Type of Work`, " - ", if_else(`Type of Hours` == "ot", "OT", "Straight"))) %>% 
+  mutate(`Type of Hours` = factor(`Type of Hours`, levels=c("Field - Straight", "Field - OT", "Teaching - Straight", "Teaching - OT"))) %>% 
+  group_by(eename, `Type of Hours`) %>% 
+  summarize(med_hours = median(Hours, na.rm=TRUE)) %>% 
+  ggplot(aes(x=eename, y=med_hours, color=`Type of Hours`)) +  geom_point(size = 3) +
+  scale_color_brewer(palette = "Set1") +
+  labs(x="Employees", y = "Hours", title="Median Weekly Hours by Employee")+
+  theme(axis.text.x=element_blank())
+```
+
+Pay is then analyzed for each employee and effective payrates are determined by including the effects of blended overtime.
+
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+library(cowplot)
+pay <- read_csv(here::here("data/pay_rates.csv"))
+
+pay_qtile <- quantile(pay$typerate, probs = seq(from=0, to=1, by=1/8))
+pay %>% mutate(pay_qtile = case_when(typerate < pay_qtile[2] ~ 1,
+                                     typerate < pay_qtile[3] ~ 2,
+                                     typerate < pay_qtile[4] ~ 3,
+                                     typerate < pay_qtile[5] ~ 4,
+                                     typerate < pay_qtile[6] ~ 5,
+                                     typerate < pay_qtile[7] ~ 6,
+                                     typerate < pay_qtile[8] ~ 7,
+                                     typerate < pay_qtile[9] ~ 8)) -> pay
+schedule_weekly_totals %>% left_join(pay) %>% mutate(reg_rate = typerate) %>% 
+  mutate(straight_pay_Field = total_field_hours * reg_rate) -> pay_by_week
+
+# function to determine effective pay by week
+effective_payrate <- function(pay_by_week, payrate) {
+  pay_by_week %>% 
+    mutate(straight_pay_Teaching = total_teaching_hours * payrate) %>% 
+    mutate(total_straight_pay = straight_pay_Field + straight_pay_Teaching) %>% 
+    mutate(weighted_avg_pay = total_straight_pay/total_hours) %>% 
+    mutate(ot_pay_Field = weighted_avg_pay*.5*ot_hours_Field,
+           ot_pay_Teaching = weighted_avg_pay*.5*ot_hours_Teaching) %>% 
+    mutate(effective_teaching_payrate = (ot_pay_Teaching + straight_pay_Teaching)/total_teaching_hours)
+}
+
+graph_effective_payrate <- function(paydata, payrate) {
+  paydata %>% ungroup() %>% summarize(mean = mean(effective_teaching_payrate, na.rm=TRUE), median=median(effective_teaching_payrate, na.rm=TRUE)) %>% pivot_longer(everything(),
+                                                                                                                                           names_to="measure", values_to="value") %>% mutate(row = row_number(value))-> summary
+
+  paydata %>% group_by(eename) %>% summarize(mean = mean(effective_teaching_payrate, na.rm=TRUE)) %>% ungroup() %>% 
+    summarize(mean = mean(mean, na.rm=TRUE), median=median(mean, na.rm=TRUE)) %>% pivot_longer(everything(), names_to="measure", values_to = "value") %>% 
+    mutate(row = row_number(value)) -> eesummary
+  
+  
+  
+  paydata %>% ggplot() + 
+      geom_histogram(aes(x=effective_teaching_payrate, fill=pay_qtile)) + 
+      geom_vline(aes(xintercept=value), summary) + 
+      geom_text(aes(y=200 - ((row-1)*15), 
+                    x=value,
+                    fontface = "bold",
+                    label=paste0(str_to_title(measure), ": ", scales::dollar(value), "/hr")),
+                vjust = "inward", 
+                hjust = "inward", 
+                nudge_x=.1,
+                data = summary) + 
+      ylim(0, 200) +
+      labs(x = "Effective Teaching Payrate", y="Number of Hours At Rate", title="Distribution of Effective Hourly Payrates",
+           subtitle=paste0("Using Teaching Base Rate of ", scales::dollar(payrate), "/hr")) -> p1
+    
+    paydata %>% group_by(eename) %>% summarize(mean = mean(effective_teaching_payrate, na.rm=TRUE)) %>%
+  ggplot(aes(x=mean)) + geom_histogram() +
+      labs(x = "Average Effective Payrate", y="Number of Employees At Rate", title="Average Effective Payrate By Employee",
+           subtitle="")+
+    geom_vline(aes(xintercept=value), eesummary) +
+      scale_y_continuous(limits=c(0,5))+
+    geom_text(aes(y=5.5 - row*.5, 
+                  x=value, 
+                  label=paste0(str_to_title(measure), ": ", scales::dollar(value), "/hr"),
+                  fontface = "bold"),
+              hjust = "inward", 
+              vjust = "inward",
+              nudge_x = .1,
+              size = 3,
+              data = eesummary) -> p2
+
+      plot_grid(p1, p2)
+  
+}
+#pay_by_week %>% effective_payrate(20) %>% graph_effective_payrate(20)
+```
+
+### CPR Instructor
+**Target pay rate for CPR Instructor:** `r sp_dollars(20, "cpr_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(CPR == 1) %>% effective_payrate(18) %>% graph_effective_payrate(18)
+```
+
+### CE Instructor
+**Target pay rate for CE Instructor:** `r sp_dollars(25, "ce_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(CE == 1) %>% effective_payrate(22) %>% graph_effective_payrate(22)
+```
+### EMT Skills Instructor
+**Target pay rate for EMT Skills Instructor:** `r sp_dollars(25, "emt_skills_rate")`/hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(EMT == 1) %>% effective_payrate(22) %>% graph_effective_payrate(22)
+```
+
+### Paramedic Skills Instructor
+**Target pay rate for Paramedic Skills Instructor:** `r sp_dollars(30, "pm_skills_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(Paramedic == 1) %>% effective_payrate(28) %>% graph_effective_payrate(28)
+```
+
+### Adjunct Faculty
+**Target pay rate for Adjunct Faculty**: `r sp_dollars(38, "adjunct_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(Paramedic == 1) %>% effective_payrate(33) %>% graph_effective_payrate(33)
+```
+## Effects on Field Overtime Pay
+If an employee works several hours teaching, and then follows this with field shifts later in the week, they will see a different overtime rate for those field shifts than they would have with just field hours. This change in overtime premium pay would affect the employee's overall earnings. The following set of analyses identifies what the change in overtime premium would be.
+
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+# 
+# pay <- read_csv(here::here("data/pay_rates.csv"))
+# 
+# pay_qtile <- quantile(pay$typerate, probs = seq(from=0, to=1, by=1/8))
+# pay %>% mutate(pay_qtile = case_when(typerate < pay_qtile[2] ~ 1,
+#                                      typerate < pay_qtile[3] ~ 2,
+#                                      typerate < pay_qtile[4] ~ 3,
+#                                      typerate < pay_qtile[5] ~ 4,
+#                                      typerate < pay_qtile[6] ~ 5,
+#                                      typerate < pay_qtile[7] ~ 6,
+#                                      typerate < pay_qtile[8] ~ 7,
+#                                      typerate < pay_qtile[9] ~ 8)) -> pay
+# schedule_weekly_totals %>% left_join(pay) %>% mutate(reg_rate = typerate) %>% 
+#   mutate(straight_pay_Field = total_field_hours * reg_rate) -> pay_by_week
+
+#' Determine Current OT rate and Change in Field OT
+#'
+#' @param pay_by_week tibble with number of field and teaching hours per week by employee.
+#' @param payrate Designated hypothetical payrate
+#'
+#' @return tibble with added columns to show total pays, OT pay, and OT pay change
+#' @export
+#'
+#' @examples
+effective_field_ot <- function(pay_by_week, payrate) {
+  pay_by_week %>% 
+    mutate(standard_ot = reg_rate * 1.5) %>% 
+    mutate(straight_pay_Teaching = total_teaching_hours * payrate) %>% 
+    mutate(total_straight_pay = straight_pay_Field + straight_pay_Teaching) %>% 
+    mutate(weighted_avg_pay = total_straight_pay/total_hours) %>% 
+    mutate(ot_pay_Field = weighted_avg_pay*.5*ot_hours_Field + reg_rate*ot_hours_Field) %>%
+    mutate(effective_field_ot_payrate = if_else(ot_hours_Field > 0, weighted_avg_pay*.5+reg_rate, 0)) %>% 
+    mutate(change_in_field_ot_payrate = (effective_field_ot_payrate - standard_ot)) %>% 
+    mutate(standard_ot_pay_Field = standard_ot * ot_hours_Field) %>% 
+    mutate(change_in_field_ot_pay_pct = (ot_pay_Field - standard_ot_pay_Field)/standard_ot_pay_Field) %>% 
+    filter(total_teaching_hours > 0, ot_hours_Field > 0)
+}
+
+graph_effective_ot_changes <- function(paydata, payrate) {
+
+  # Summary for lines
+  paydata %>% group_by(eename) %>% summarize(mean = mean(change_in_field_ot_payrate, na.rm=TRUE)) %>% ungroup() %>% 
+    summarize(`Mean Change` = mean(mean, na.rm=TRUE), `Median Change`=median(mean, na.rm=TRUE)) %>% pivot_longer(everything(), names_to="measure", values_to = "value") %>% 
+    mutate(row = row_number(value)) -> eesummary
+
+  # Set levels
+  paydata %>% group_by(eename) %>% summarize(sum_standard_pay = sum(standard_ot_pay_Field, na.rm=TRUE),
+                                               sum_effective_pay = sum(ot_pay_Field, na.rm=TRUE),
+                                             sum_field_ot_hours = sum(ot_hours_Field, na.rm=TRUE)) %>% 
+      mutate(change_in_field_ot_pct = (sum_effective_pay - sum_standard_pay)/sum_standard_pay) %>% arrange(sum_field_ot_hours) -> eename_levels
+    
+    paydata %>% group_by(eename) %>% summarize(mean = mean(change_in_field_ot_payrate, na.rm=TRUE)) %>%
+  ggplot(aes(x=mean)) + geom_histogram() +
+      labs(x = "Average Change in Field Overtime Payrate", y="Number of Employees", title="How Employee Field Overtime Payrate Changes",
+           subtitle=paste0("Using Teaching Base Rate of ", scales::dollar(payrate), "/hr"))+
+    geom_vline(aes(xintercept=value), eesummary) +
+      scale_y_continuous(limits=c(0,5))+
+      scale_x_continuous(labels=scales::dollar_format())+
+    geom_text(aes(y=5.5 - row*.5, 
+                  x=value, 
+                  label=paste0(str_to_title(measure), ": ", scales::dollar(value), "/hr"),
+                  fontface = "bold"),
+              hjust = "inward", 
+              vjust = "inward",
+              nudge_x = .1,
+              size = 3,
+              data = eesummary) -> p1
+    
+    paydata %>% group_by(eename) %>% summarize(sum_standard_pay = sum(standard_ot_pay_Field, na.rm=TRUE),
+                                               sum_effective_pay = sum(ot_pay_Field, na.rm=TRUE),
+                                               sum_field_ot_hours = sum(ot_hours_Field, na.rm=TRUE),
+                                               reg_rate = mean(standard_ot, na.rm=TRUE),
+                                               weighted_avg_rate = mean(effective_field_ot_payrate, na.rm=TRUE)) %>%
+      mutate(change_in_field_ot_pct = (sum_effective_pay - sum_standard_pay)/sum_standard_pay) %>% 
+      #mutate(change_in_field_ot_pct = (sum_effective_pay - sum_standard_pay)) %>% 
+      mutate(eename = factor(eename, levels = eename_levels$eename)) %>% 
+      ggplot(aes(x=sum_field_ot_hours, y=change_in_field_ot_pct)) + geom_point(size=3) + 
+      scale_y_continuous(labels = scales::percent_format(scale = 100)) +
+      #scale_y_continuous(labels = scales::dollar_format())+
+      labs(x="Annual Field Overtime Hours", y="Percent Change", title="Change in Annual Field Overtime Pay", subtitle="Change in Total Field Overtime Pay From Teaching Rate") -> p2
+
+      plot_grid(p1, p2)
+  
+}
+
+```
+### CPR Instructor
+**Target pay rate for CPR Instructor:** `r scales::dollar(cpr_rate)` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(CPR == 1) %>% effective_field_ot(cpr_rate) %>% graph_effective_ot_changes(cpr_rate)
+```
+
+### CE Instructor
+**Target pay rate for CE Instructor:** `r scales::dollar(ce_rate)` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(CE == 1) %>% effective_field_ot(ce_rate) %>% graph_effective_ot_changes(ce_rate)
+```
+### EMT Skills Instructor
+**Target pay rate for EMT Skills Instructor:** `r scales::dollar(emt_skills_rate)`/hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(EMT == 1) %>% effective_field_ot(emt_skills_rate) %>% graph_effective_ot_changes(emt_skills_rate)
+```
+
+### Paramedic Skills Instructor
+**Target pay rate for Paramedic Skills Instructor:** `r scales::dollar(pm_skills_rate)` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(Paramedic == 1) %>% effective_field_ot(pm_skills_rate) %>% graph_effective_ot_changes(pm_skills_rate)
+```
+
+### Adjunct Faculty
+**Target pay rate for Adjunct Faculty**: `r scales::dollar(adjunct_rate)` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week %>% filter(Paramedic == 1) %>% effective_field_ot(adjunct_rate) %>% graph_effective_ot_changes(adjunct_rate)
+```
+
+
+## Pay Rate Analysis (Using Total Overtime, probably incorrect)
+
+An alternate calculation can be made by looking at all teaching hours as overtime if the employee has at least 40 hours of field work in the week. With this approach, all teaching time is considered overtime, regardless of when in the week it was worked.
+
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+
+pay_by_week %>% 
+  mutate(ot_hours_Field = if_else(total_field_hours > 40, total_field_hours-40, 0)) %>% 
+  mutate(straight_hours_Field = total_field_hours - ot_hours_Field) %>% 
+  mutate(straight_hours_Teaching = case_when(ot_hours_Field > 0 ~ 0,
+                                             (40 - total_field_hours) > total_teaching_hours ~ total_teaching_hours,
+                                             TRUE ~ 40 - total_field_hours)) %>% 
+  mutate(ot_hours_Teaching = total_teaching_hours - straight_hours_Teaching) -> pay_by_week2
+
+
+pay_by_week2 %>% select(-starts_with("total"), -typedesc:straight_pay_Field) %>% 
+  mutate(eename = factor(eename, levels=eename_levels$eename)) %>% 
+  pivot_longer(cols = contains("hours"), 
+               names_to = "Type of Hours",
+               values_to = "Hours") %>% 
+  separate(`Type of Hours`, c("Type of Hours", "Type of Work"), sep="_hours_") %>% 
+  mutate(`Type of Hours` = paste0(`Type of Work`, " - ", if_else(`Type of Hours` == "ot", "OT", "Straight"))) %>% 
+  mutate(`Type of Hours` = factor(`Type of Hours`, levels=c("Field - Straight", "Field - OT", "Teaching - Straight", "Teaching - OT"))) %>% 
+  group_by(eename, `Type of Hours`) %>% 
+  summarize(med_hours = median(Hours, na.rm=TRUE)) %>% 
+  ggplot(aes(x=eename, y=med_hours, color=`Type of Hours`)) +  geom_point(size = 3) +
+  scale_color_brewer(palette = "Set1") +
+  labs(x="Employees", y = "Hours", title="Median Weekly Hours by Employee, alternate calculation", caption = "All teaching counts as overtime if employee worked at least 40 field hours in the week")+
+  theme(axis.text.x=element_blank())
+
+#pay_by_week %>% effective_payrate(20) %>% graph_effective_payrate(20)
+```
+
+### CPR Instructor
+**Target pay rate for CPR Instructor:** `r sp_dollars(20, "cpr_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week2 %>% filter(CPR == 1) %>% effective_payrate(11) %>% graph_effective_payrate(11)
+```
+
+### CE Instructor
+**Target pay rate for CE Instructor:** `r sp_dollars(25, "ce_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week2 %>% filter(CE == 1) %>% effective_payrate(14) %>% graph_effective_payrate(14)
+```
+### EMT Skills Instructor
+**Target pay rate for EMT Skills Instructor:** `r sp_dollars(25, "emt_skills_rate")`/hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week2 %>% filter(EMT == 1) %>% effective_payrate(14) %>% graph_effective_payrate(14)
+```
+
+### Paramedic Skills Instructor
+**Target pay rate for Paramedic Skills Instructor:** `r sp_dollars(30, "pm_skills_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week2 %>% filter(Paramedic == 1) %>% effective_payrate(19) %>% graph_effective_payrate(19)
+```
+
+### Adjunct Faculty
+**Target pay rate for Adjunct Faculty**: `r sp_dollars(38, "adjunct_rate")` /hr.
+```{r echo=FALSE, fig.height=4, fig.width=12, message=FALSE, warning=FALSE}
+pay_by_week2 %>% filter(Paramedic == 1) %>% effective_payrate(23) %>% graph_effective_payrate(23)
+```
